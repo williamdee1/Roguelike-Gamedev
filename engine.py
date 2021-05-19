@@ -1,89 +1,50 @@
 import tcod as libtcod
 """ From the Roguelike Dev Tutorial found at : http://rogueliketutorials.com/tutorials/tcod/ """
-"""Current Stage - Part 9"""
 
-from components.fighter import Fighter
-from components.inventory import Inventory
+
 from death_functions import kill_monster, kill_player
-from entity import Entity, get_blocking_entities_at_location
+from entity import get_blocking_entities_at_location
 from fov_functions import initialize_fov, recompute_fov
-from game_messages import Message, MessageLog
+from game_messages import Message
 from game_states import GameStates
-from input_handlers import handle_keys
-from map_objects.game_map import GameMap
-from render_functions import clear_all, render_all, RenderOrder
+from input_handlers import handle_keys, handle_mouse
+from render_functions import clear_all, render_all
+from loader_functions.initialize_new_game import get_constants, get_game_variables
 
 
 def main():
-    screen_width = 80
-    screen_height = 50
+    constants = get_constants()
 
-    bar_width = 20
-    panel_height = 7
-    panel_y = screen_height - panel_height
+    libtcod.console_set_custom_font('arial10x10.png', libtcod.FONT_TYPE_GREYSCALE | libtcod.FONT_LAYOUT_TCOD)
 
-    message_x = bar_width + 2
-    message_width = screen_width - bar_width - 2
-    message_height = panel_height - 1
+    libtcod.console_init_root(constants['screen_width'], constants['screen_height'], constants['window_title'], False)
 
-    map_width = 80
-    map_height = 43
+    con = libtcod.console_new(constants['screen_width'], constants['screen_height'])
+    panel = libtcod.console_new(constants['screen_width'], constants['panel_height'])
 
-    room_max_size = 10
-    room_min_size = 6
-    max_rooms = 30
-
-    fov_algorithm = 0  # the default algo that libtcod uses for Field of View
-    fov_light_walls = True  # whether to light up the walls that you see
-    fov_radius = 10 # how far you can see
-
-    max_monsters_per_room = 3 # used in the game_map file to place entities
-    max_items_per_room = 2
-
-    colors = {
-        'dark_wall': libtcod.Color(0, 0, 100),
-        'dark_ground': libtcod.Color(50, 50, 150),
-        'light_wall': libtcod.Color(130, 110, 50),
-        'light_ground': libtcod.Color(200, 180, 50)
-    }
-
-    fighter_component = Fighter(hp = 30, defense = 2, power = 5) # ascribing values to fighter, calling the functon within components
-    inventory_component = Inventory(26)  # how much you can hold
-    player = Entity(0,0, '@', libtcod.black, 'Player', blocks = True, render_order = RenderOrder.ACTOR,
-                    fighter = fighter_component, inventory = inventory_component) # the player then has the attributes listed above
-    entities = [player]
-
-    libtcod.console_set_custom_font('image.png', libtcod.FONT_TYPE_GREYSCALE | libtcod.FONT_LAYOUT_TCOD) # setting font according to our file
-
-    libtcod.console_init_root(screen_width, screen_height, 'roguelike game', False) # name of the game and width/height
-
-    con = libtcod.console_new(screen_width, screen_height) # defining a specific console 'con' to be able to write to
-
-    panel = libtcod.console_new(screen_width, panel_height) # 2nd console, holding HP bar and any messages
-
-    game_map = GameMap(map_width, map_height) # initializes the gamemap from gamemap.py in map_objects folder
-    game_map.make_map(max_rooms, room_min_size, room_max_size, map_width, map_height, player, entities, max_monsters_per_room, max_items_per_room)
+    player, entities, game_map, message_log, game_state = get_game_variables(constants)
 
     fov_recompute = True # used to tell algo when to change field of view, i.e. only when moving not when standing still/attacking
 
     fov_map = initialize_fov(game_map)
 
-    message_log = MessageLog(message_x, message_width, message_height)
-
     key = libtcod.Key()
     mouse = libtcod.Mouse()
 
-    game_state = GameStates.PLAYERS_TURN # starts on players turn
     previous_game_state = game_state # Used to not skip a players turn if they do something like pick up an item
+
+    targeting_item = None
 
     while not libtcod.console_is_window_closed(): # a loop that won't end until the game window is closed
         libtcod.sys_check_for_event(libtcod.EVENT_KEY_PRESS | libtcod.EVENT_MOUSE, key, mouse) # this captures user input and updates the key/mouse variables above
 
         if fov_recompute:
-            recompute_fov(fov_map, player.x, player.y, fov_radius, fov_light_walls, fov_algorithm) # coming from fov_functions
+            recompute_fov(fov_map, player.x, player.y, constants['fov_radius'], constants['fov_light_walls'],
+                          constants['fov_algorithm']) # coming from fov_functions
 
-        render_all(con, panel, entities, player, game_map, fov_map, fov_recompute, message_log, screen_width,
-                   screen_height, bar_width, panel_height, panel_y, mouse, colors, game_state) # con is the current console, entities is drawn in render_functions
+        render_all(con, panel, entities, player, game_map, fov_map, fov_recompute, message_log,
+                   constants['screen_width'], constants['screen_height'], constants['bar_width'],
+                   constants['panel_height'], constants['panel_y'], mouse, constants['colors'], game_state) # con is the current console, entities is drawn in render_functions
 
         fov_recompute = False
 
@@ -93,6 +54,7 @@ def main():
 
         """Action Handling"""
         action = handle_keys(key, game_state) # calls our handle keys function from the input_handlers file, using our key variable, to result in a dictionary called action
+        mouse_action = handle_mouse(mouse)
 
         move = action.get('move') # uses the action dictionary created above to return move, exit, pickup or fullscreen from handle_keys function
         pickup = action.get('pickup')
@@ -101,6 +63,9 @@ def main():
         inventory_index = action.get('inventory_index')
         exit = action.get('exit')
         fullscreen = action.get('fullscreen')
+
+        left_click = mouse_action.get('left_click')
+        right_click = mouse_action.get('right_click')
 
         player_turn_results = []
 
@@ -146,13 +111,25 @@ def main():
             item = player.inventory.items[inventory_index]
 
             if game_state == GameStates.SHOW_INVENTORY:
-                player_turn_results.extend(player.inventory.use(item))
+                player_turn_results.extend(player.inventory.use(item, entities=entities, fov_map=fov_map))
             elif game_state == GameStates.DROP_INVENTORY:
                 player_turn_results.extend(player.inventory.drop_item(item))
+
+        if game_state == GameStates.TARGETING:
+            if left_click:
+                target_x, target_y = left_click
+
+                item_use_results = player.inventory.use(targeting_item, entities=entities, fov_map=fov_map,
+                                                        target_x=target_x, target_y=target_y)
+                player_turn_results.extend(item_use_results)
+            elif right_click:
+                player_turn_results.append({'targeting_cancelled': True})
 
         if exit:
             if game_state in (GameStates.SHOW_INVENTORY, GameStates.DROP_INVENTORY):
                 game_state = previous_game_state  # now the Esc key just exits the inventory menu, rather than the whole game
+            elif game_state == GameStates.TARGETING:
+                player_turn_results.append({'targeting_cancelled': True})
             else:
                 return True
 
@@ -165,9 +142,16 @@ def main():
             item_added = player_turn_result.get('item_added')
             item_consumed = player_turn_result.get('consumed')
             item_dropped = player_turn_result.get('item_dropped')
+            targeting = player_turn_result.get('targeting')
+            targeting_cancelled = player_turn_result.get('targeting_cancelled')
 
             if message:
                 message_log.add_message(message)
+
+            if targeting_cancelled:
+                game_state = previous_game_state
+
+                message_log.add_message(Message('Targeting cancelled'))
 
             if dead_entity:
                 if dead_entity == player:
@@ -184,6 +168,14 @@ def main():
 
             if item_consumed:
                 game_state = GameStates.ENEMY_TURN
+
+            if targeting:
+                previous_game_state = GameStates.PLAYERS_TURN
+                game_state = GameStates.TARGETING
+
+                targeting_item = targeting
+
+                message_log.add_message(targeting_item.item.targeting_message)
 
             if item_dropped:
                 entities.append(item_dropped)
